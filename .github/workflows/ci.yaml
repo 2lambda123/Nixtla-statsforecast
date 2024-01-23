@@ -40,7 +40,72 @@ jobs:
           git status -s # display the status to see which nbs need cleaning up
           if [ -n "$(git status -uno -s)" ]; then echo -e "!!! Detected unstripped out notebooks\n!!!Remember to run nbdev_install_git_hooks and running ./action_files/clean_nbs before committing"; false; fi
 
+  build_wheels:
+    name: Build wheels for ${{ matrix.platform-id }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-20.04
+            platform-id: manylinux_x86_64
+          - os: ubuntu-20.04
+            platform-id: manylinux_aarch64
+          - os: windows-2019
+            platform-id: win_amd64
+          - os: macos-11
+            platform-id: macosx_x86_64
+          - os: macos-latest
+            platform-id: macosx_arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: runner.os == 'Linux'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.16.2
+        env:
+          CIBW_BUILD: cp38-${{ matrix.platform-id }}
+
+      - uses: actions/upload-artifact@v3
+        with:
+          path: wheelhouse/*.whl
+          retention-days: 1
+
+  publish-nightly-wheels:
+    if: github.event_name == 'push'
+    needs: [build_wheels]
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_NIXTLA_PACKAGES }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_NIXTLA_PACKAGES }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download wheels
+        uses: actions/download-artifact@v3
+        with:
+          name: artifact
+          path: dist
+
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.10'
+
+      - name: Publish wheels
+        run: |
+          pip install awscli beautifulsoup4
+          aws s3 cp s3://nixtla-packages/statsforecast/index.html .
+          python action_files/update_index.py
+          aws s3 sync dist s3://nixtla-packages/statsforecast/
+
+
   run-local-tests:
+    needs: [build_wheels]
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -55,15 +120,23 @@ jobs:
         with:
           environment-file: dev/local_environment.yml
           create-args: python=${{ matrix.python-version }}
-          cache-environment: true
+          cache-environment: false
 
-      - name: Install pip requirements
-        run: pip install ./
+      - name: Download wheels
+        uses: actions/download-artifact@v3
+        with:
+          name: artifact
+          path: dist
+
+      - name: Install the library
+        run: pip install --no-index --find-links dist statsforecast
 
       - name: Run local tests
         run: nbdev_test --skip_file_re '(models|distributed|ets).*.ipynb' --pause 1.0 --do_print --timing
 
+
   run-tests:
+    needs: [build_wheels]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -82,8 +155,14 @@ jobs:
           create-args: python=${{ matrix.python-version }}
           cache-environment: true
 
-      - name: Install pip requirements
-        run: pip install ./
+      - name: Download wheels
+        uses: actions/download-artifact@v3
+        with:
+          name: artifact
+          path: dist
+
+      - name: Install the library
+        run: pip install --no-index --find-links dist statsforecast
 
       - name: Run tests 
         run: nbdev_test --skip_file_re '(distributed).*.ipynb' --pause 1.0 --do_print --timing
@@ -109,7 +188,7 @@ jobs:
           cache-environment: true
 
       - name: Install library and extra deps
-        run: pip install ".[dev]" fire
+        run: pip install --no-build-isolation ".[dev]" -v && pip install fire
 
       - name: Run M3 experiment
         run: |

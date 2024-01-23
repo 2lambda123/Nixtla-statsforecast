@@ -2,9 +2,12 @@ name: statsforecast
 channels:
   - conda-forge
 dependencies:
+  - cloudpickle
+  - cmake
   - holidays<0.21 # zone info errors
   - jupyterlab
   - matplotlib
+  - ninja
   - numba>=0.55.0
   - numpy>=1.21.6
   - pandas>=1.3.5,<2.2
@@ -12,6 +15,7 @@ dependencies:
   - pip
   - prophet
   - pyarrow
+  - scikit-build-core
   - scipy>=1.7.3
   - statsmodels>=0.13.2
   - tabulate
